@@ -1,0 +1,148 @@
+Hunyuan-MT-7B Long-Form Text Translator
+A Modal-deployed API for translating long-form text to English using Tencent's Hunyuan-MT-7B model.
+Features
+
+🌍 18+ Languages: Chinese, Spanish, French, German, Japanese, Korean, and more
+📝 Long-form Text: Handles up to 10,000 characters input
+⚡ Fast Translation: GPU-accelerated with A10G
+🔧 Batch Processing: Translate multiple texts at once
+🚀 Auto-deploy: GitHub Actions CI/CD pipeline
+💰 Cost-effective: Serverless, pay only when translating
+
+API Endpoints
+After deployment, you'll get these endpoints:
+1. Translate Text
+bashPOST https://YOUR-USERNAME--hunyuan-translator-translate.modal.run
+
+# Example request:
+{
+  "text": "你好世界，这是一个很长的文本...",
+  "source_language": "chinese",
+  "max_length": 4000
+}
+2. Batch Translation
+bashPOST https://YOUR-USERNAME--hunyuan-translator-translate-batch.modal.run
+
+# Example request:
+{
+  "texts": ["Text 1", "Text 2", "Text 3"],
+  "source_language": "spanish"
+}
+3. Health Check
+bashGET https://YOUR-USERNAME--hunyuan-translator-health.modal.run
+4. Supported Languages
+bashGET https://YOUR-USERNAME--hunyuan-translator-languages.modal.run
+Setup Instructions
+Step 1: Fork this Repository
+Click the "Fork" button at the top right
+Step 2: Get Modal Credentials
+
+Sign up at modal.com
+Go to Settings → Tokens
+Create a new token
+Copy the Token ID and Secret
+
+Step 3: Add GitHub Secrets
+
+Go to your forked repo → Settings → Secrets → Actions
+Add these secrets:
+
+MODAL_TOKEN_ID: Your Modal token ID
+MODAL_TOKEN_SECRET: Your Modal token secret
+
+
+
+Step 4: Deploy
+
+Go to Actions tab
+Click "Deploy to Modal"
+Click "Run workflow"
+Wait for deployment (~5 minutes)
+
+Usage Examples
+Python
+pythonimport requests
+
+url = "https://YOUR-USERNAME--hunyuan-translator-translate.modal.run"
+data = {
+    "text": "这是一段很长的中文文本，需要翻译成英文...",
+    "source_language": "chinese"
+}
+
+response = requests.post(url, json=data)
+print(response.json()["translation"])
+JavaScript
+javascriptconst response = await fetch('YOUR-MODAL-URL/translate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+        text: "Ceci est un long texte français...",
+        source_language: "french"
+    })
+});
+
+const data = await response.json();
+console.log(data.translation);
+cURL
+bashcurl -X POST YOUR-MODAL-URL/translate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hola mundo", "source_language": "spanish"}'
+Supported Languages
+
+Chinese → English
+Spanish → English
+French → English
+German → English
+Russian → English
+Japanese → English
+Korean → English
+Arabic → English
+Portuguese → English
+Italian → English
+Dutch → English
+Turkish → English
+Polish → English
+Swedish → English
+Hindi → English
+Vietnamese → English
+Thai → English
+Indonesian → English
+
+Cost Estimates
+
+A10G GPU: ~$1.10/hour when active
+Serverless: Only charged when processing
+Per translation: ~$0.02-0.05 (depends on length)
+Idle timeout: 10 minutes (configurable)
+
+Performance
+
+Model: Hunyuan-MT-7B (8-bit quantized)
+Max input: 10,000 characters
+Max output: 4,000 tokens
+Cold start: 20-30 seconds
+Warm response: 2-5 seconds for 1000 chars
+
+Advanced Configuration
+Increase timeout for longer texts:
+Edit translator.py:
+python@app.cls(
+    timeout=600,  # 10 minutes
+    container_idle_timeout=1800,  # 30 minutes
+)
+Use larger GPU for faster processing:
+pythongpu=modal.gpu.A100(),  # Fastest but more expensive
+Monitoring
+View logs and usage at:
+
+modal.com/dashboard
+
+Troubleshooting
+Deployment fails: Check your Modal secrets in GitHub
+Translation timeout: Reduce text length or increase timeout
+Out of memory: Text too long, split into chunks
+Cold starts slow: Increase container_idle_timeout
+License
+MIT
+Support
+For issues, open a GitHub issue or check Modal docs at modal.com/docs
