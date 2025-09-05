@@ -4,29 +4,31 @@ import json
 
 app = modal.App("hunyuan-translator")
 
-# Create image with all dependencies INCLUDING FastAPI
-image = modal.Image.debian_slim(python_version="3.10").pip_install(
-    "torch==2.1.0",
-    "transformers==4.36.0",
-    "sentencepiece==0.1.99",
-    "accelerate==0.25.0",
-    "bitsandbytes==0.41.3",
-    "fastapi",  # REQUIRED for web endpoints
-    "pydantic"
+# Create image with FastAPI installed FIRST
+image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .pip_install("fastapi", "uvicorn")  # Install FastAPI and uvicorn FIRST
+    .pip_install(
+        "torch==2.1.0",
+        "transformers==4.36.0",
+        "sentencepiece==0.1.99",
+        "accelerate==0.25.0",
+        "bitsandbytes==0.41.3",
+        "pydantic"
+    )
 )
 
 @app.cls(
     image=image,
-    gpu="A10G",  # Fixed: Use string instead of modal.gpu.A10G()
-    memory=32768,  # 32GB RAM
-    scaledown_window=300,  # Fixed: Renamed from container_idle_timeout
-    timeout=600,  # 10 minute timeout for requests
+    gpu="A10G",
+    memory=32768,
+    scaledown_window=300,
+    timeout=600,
 )
 class HunyuanTranslator:
-    @modal.enter()
-    def setup(self):
-        """Load the model on container startup"""
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+    def __enter__(self):
+        """Load the model on container startup (Modal v1.0 style)"""
+        from transformers import MarianMTModel, MarianTokenizer
         import torch
         
         print("🔄 Loading translation model...")
@@ -35,19 +37,19 @@ class HunyuanTranslator:
         model_name = "Helsinki-NLP/opus-mt-es-en"  # Spanish to English
         
         try:
-            # For the smaller model
-            from transformers import MarianMTModel, MarianTokenizer
             self.tokenizer = MarianTokenizer.from_pretrained(model_name)
             self.model = MarianMTModel.from_pretrained(model_name)
-            self.model = self.model.to("cuda" if torch.cuda.is_available() else "cpu")
-            print(f"✅ Model loaded successfully on {'CUDA' if torch.cuda.is_available() else 'CPU'}!")
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.model = self.model.to(self.device)
+            print(f"✅ Model loaded successfully on {self.device}!")
         except Exception as e:
             print(f"❌ Error loading model: {e}")
-            # Fallback to even simpler model
-            model_name = "t5-small"
+            # Fallback
             from transformers import T5ForConditionalGeneration, T5Tokenizer
+            model_name = "t5-small"
             self.tokenizer = T5Tokenizer.from_pretrained(model_name)
             self.model = T5ForConditionalGeneration.from_pretrained(model_name)
+            self.device = "cpu"
             print("✅ Loaded fallback T5 model")
         
         # Language mapping
@@ -64,7 +66,7 @@ class HunyuanTranslator:
             "russian": "Russian"
         }
     
-    @modal.fastapi_endpoint(method="POST")  # Fixed: Only use fastapi_endpoint, no modal.method()
+    @modal.web_endpoint(method="POST")
     def translate(self, request: Dict) -> Dict:
         """Main translation endpoint"""
         import torch
@@ -101,7 +103,7 @@ class HunyuanTranslator:
                     
                     for chunk in chunks:
                         inputs = self.tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
                         
                         with torch.no_grad():
                             translated = self.model.generate(**inputs, max_length=512)
@@ -113,14 +115,14 @@ class HunyuanTranslator:
                 else:
                     # Process as single text
                     inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                    inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
                     
                     with torch.no_grad():
                         translated = self.model.generate(**inputs, max_length=512)
                     
                     translation = self.tokenizer.decode(translated[0], skip_special_tokens=True)
             else:
-                # For other languages, use T5 or return as-is for now
+                # For other languages
                 translation = f"[Translation from {source_language} not fully configured yet. Original text:] {text[:1000]}"
             
             return {
@@ -143,7 +145,7 @@ class HunyuanTranslator:
                 "translation": ""
             }
     
-    @modal.fastapi_endpoint(method="POST")  # Fixed: Only use fastapi_endpoint
+    @modal.web_endpoint(method="POST")
     def translate_batch(self, request: Dict) -> Dict:
         """Batch translation endpoint"""
         texts = request.get("texts", [])
@@ -177,13 +179,13 @@ class HunyuanTranslator:
             "total": len(results)
         }
     
-    @modal.fastapi_endpoint(method="GET")  # Fixed: Only use fastapi_endpoint
+    @modal.web_endpoint(method="GET")
     def health(self) -> Dict:
         """Health check endpoint"""
         import torch
         return {
             "status": "healthy",
-            "model": "opus-mt-es-en (temporary)",
+            "model": "opus-mt-es-en",
             "gpu": str(torch.cuda.is_available()),
             "ready": True,
             "note": "Using smaller model for stability",
@@ -195,7 +197,7 @@ class HunyuanTranslator:
             }
         }
     
-    @modal.fastapi_endpoint(method="GET")  # Fixed: Only use fastapi_endpoint
+    @modal.web_endpoint(method="GET")
     def languages(self) -> Dict:
         """Get supported languages"""
         return {
@@ -204,9 +206,3 @@ class HunyuanTranslator:
             "total_languages": len(self.supported_languages),
             "note": "Currently optimized for Spanish to English"
         }
-
-# Test endpoint to verify deployment
-@app.function()
-@modal.fastapi_endpoint(method="GET")
-def test():
-    return {"status": "Translator app is deployed and ready!"}
