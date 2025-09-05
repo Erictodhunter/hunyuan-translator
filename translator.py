@@ -64,8 +64,7 @@ class HunyuanTranslator:
             "russian": "Russian"
         }
     
-    @modal.method()
-    @modal.fastapi_endpoint(method="POST")  # Fixed: Using fastapi_endpoint
+    @modal.fastapi_endpoint(method="POST")  # Fixed: Only use fastapi_endpoint, no modal.method()
     def translate(self, request: Dict) -> Dict:
         """Main translation endpoint"""
         import torch
@@ -144,8 +143,7 @@ class HunyuanTranslator:
                 "translation": ""
             }
     
-    @modal.method()
-    @modal.fastapi_endpoint(method="POST")  # Fixed: Using fastapi_endpoint
+    @modal.fastapi_endpoint(method="POST")  # Fixed: Only use fastapi_endpoint
     def translate_batch(self, request: Dict) -> Dict:
         """Batch translation endpoint"""
         texts = request.get("texts", [])
@@ -179,8 +177,7 @@ class HunyuanTranslator:
             "total": len(results)
         }
     
-    @modal.method()
-    @modal.fastapi_endpoint(method="GET")  # Fixed: Using fastapi_endpoint
+    @modal.fastapi_endpoint(method="GET")  # Fixed: Only use fastapi_endpoint
     def health(self) -> Dict:
         """Health check endpoint"""
         import torch
@@ -198,8 +195,7 @@ class HunyuanTranslator:
             }
         }
     
-    @modal.method()
-    @modal.fastapi_endpoint(method="GET")  # Fixed: Using fastapi_endpoint
+    @modal.fastapi_endpoint(method="GET")  # Fixed: Only use fastapi_endpoint
     def languages(self) -> Dict:
         """Get supported languages"""
         return {
@@ -211,6 +207,6 @@ class HunyuanTranslator:
 
 # Test endpoint to verify deployment
 @app.function()
-@modal.fastapi_endpoint(method="GET")  # Fixed: Using fastapi_endpoint
+@modal.fastapi_endpoint(method="GET")
 def test():
     return {"status": "Translator app is deployed and ready!"}
