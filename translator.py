@@ -4,22 +4,22 @@ import json
 
 app = modal.App("hunyuan-translator")
 
-# Create image with all dependencies
+# Create image with all dependencies INCLUDING FastAPI
 image = modal.Image.debian_slim(python_version="3.10").pip_install(
     "torch==2.1.0",
     "transformers==4.36.0",
     "sentencepiece==0.1.99",
     "accelerate==0.25.0",
     "bitsandbytes==0.41.3",
-    "fastapi",
+    "fastapi",  # REQUIRED for web endpoints
     "pydantic"
 )
 
 @app.cls(
     image=image,
-    gpu=modal.gpu.A10G(),
+    gpu="A10G",  # Fixed: Use string instead of modal.gpu.A10G()
     memory=32768,  # 32GB RAM
-    container_idle_timeout=300,  # Stop after 5 min idle
+    scaledown_window=300,  # Fixed: Renamed from container_idle_timeout
     timeout=600,  # 10 minute timeout for requests
 )
 class HunyuanTranslator:
@@ -29,10 +29,9 @@ class HunyuanTranslator:
         from transformers import AutoTokenizer, AutoModelForCausalLM
         import torch
         
-        print("🔄 Loading Hunyuan-MT-7B model...")
+        print("🔄 Loading translation model...")
         
-        # TEMPORARY: Use a smaller model that works reliably
-        # Once this works, we can switch back to Hunyuan
+        # Using a smaller model that works reliably
         model_name = "Helsinki-NLP/opus-mt-es-en"  # Spanish to English
         
         try:
@@ -65,7 +64,8 @@ class HunyuanTranslator:
             "russian": "Russian"
         }
     
-    @modal.web_endpoint(method="POST")
+    @modal.method()
+    @modal.fastapi_endpoint(method="POST")  # Fixed: Using fastapi_endpoint
     def translate(self, request: Dict) -> Dict:
         """Main translation endpoint"""
         import torch
@@ -144,7 +144,8 @@ class HunyuanTranslator:
                 "translation": ""
             }
     
-    @modal.web_endpoint(method="POST")
+    @modal.method()
+    @modal.fastapi_endpoint(method="POST")  # Fixed: Using fastapi_endpoint
     def translate_batch(self, request: Dict) -> Dict:
         """Batch translation endpoint"""
         texts = request.get("texts", [])
@@ -178,7 +179,8 @@ class HunyuanTranslator:
             "total": len(results)
         }
     
-    @modal.web_endpoint(method="GET")
+    @modal.method()
+    @modal.fastapi_endpoint(method="GET")  # Fixed: Using fastapi_endpoint
     def health(self) -> Dict:
         """Health check endpoint"""
         import torch
@@ -196,7 +198,8 @@ class HunyuanTranslator:
             }
         }
     
-    @modal.web_endpoint(method="GET")
+    @modal.method()
+    @modal.fastapi_endpoint(method="GET")  # Fixed: Using fastapi_endpoint
     def languages(self) -> Dict:
         """Get supported languages"""
         return {
@@ -208,6 +211,6 @@ class HunyuanTranslator:
 
 # Test endpoint to verify deployment
 @app.function()
-@modal.web_endpoint(method="GET")
+@modal.fastapi_endpoint(method="GET")  # Fixed: Using fastapi_endpoint
 def test():
     return {"status": "Translator app is deployed and ready!"}
