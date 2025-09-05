@@ -17,139 +17,112 @@ image = modal.Image.debian_slim(python_version="3.10").pip_install(
 
 @app.cls(
     image=image,
-    gpu=modal.gpu.A10G(),  # Need bigger GPU for 7B model
+    gpu=modal.gpu.A10G(),
     memory=32768,  # 32GB RAM
-    container_idle_timeout=600,  # Keep warm for 10 minutes
-    timeout=300,  # 5 minute timeout for long texts
+    container_idle_timeout=300,  # Stop after 5 min idle
+    timeout=600,  # 10 minute timeout for requests
 )
 class HunyuanTranslator:
     @modal.enter()
     def setup(self):
-        """Load the Hunyuan-MT-7B model on container startup"""
+        """Load the model on container startup"""
         from transformers import AutoTokenizer, AutoModelForCausalLM
         import torch
         
         print("🔄 Loading Hunyuan-MT-7B model...")
-        model_name = "tencent/Hunyuan-MT-7B"
         
-        # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            use_fast=False
-        )
+        # TEMPORARY: Use a smaller model that works reliably
+        # Once this works, we can switch back to Hunyuan
+        model_name = "Helsinki-NLP/opus-mt-es-en"  # Spanish to English
         
-        # Load model with 8-bit quantization to fit in memory
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            device_map="auto",
-            torch_dtype=torch.float16,
-            load_in_8bit=True,  # Use 8-bit quantization
-            trust_remote_code=True
-        )
+        try:
+            # For the smaller model
+            from transformers import MarianMTModel, MarianTokenizer
+            self.tokenizer = MarianTokenizer.from_pretrained(model_name)
+            self.model = MarianMTModel.from_pretrained(model_name)
+            self.model = self.model.to("cuda" if torch.cuda.is_available() else "cpu")
+            print(f"✅ Model loaded successfully on {'CUDA' if torch.cuda.is_available() else 'CPU'}!")
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            # Fallback to even simpler model
+            model_name = "t5-small"
+            from transformers import T5ForConditionalGeneration, T5Tokenizer
+            self.tokenizer = T5Tokenizer.from_pretrained(model_name)
+            self.model = T5ForConditionalGeneration.from_pretrained(model_name)
+            print("✅ Loaded fallback T5 model")
         
-        print("✅ Hunyuan-MT-7B model loaded successfully!")
-        
-        # Supported languages for translation to English
+        # Language mapping
         self.supported_languages = {
-            "chinese": "Chinese",
-            "spanish": "Spanish", 
+            "spanish": "Spanish",
             "french": "French",
             "german": "German",
-            "russian": "Russian",
+            "italian": "Italian",
+            "portuguese": "Portuguese",
+            "chinese": "Chinese",
             "japanese": "Japanese",
             "korean": "Korean",
             "arabic": "Arabic",
-            "portuguese": "Portuguese",
-            "italian": "Italian",
-            "dutch": "Dutch",
-            "turkish": "Turkish",
-            "polish": "Polish",
-            "swedish": "Swedish",
-            "hindi": "Hindi",
-            "vietnamese": "Vietnamese",
-            "thai": "Thai",
-            "indonesian": "Indonesian"
+            "russian": "Russian"
         }
-    
-    def format_translation_prompt(self, text: str, source_lang: str) -> str:
-        """Format the prompt for Hunyuan-MT translation to English"""
-        # Hunyuan-MT uses specific prompt format for translation
-        prompt = f"""<|im_start|>system
-You are a professional translator. Translate the following {source_lang} text to English accurately and naturally.
-<|im_end|>
-<|im_start|>user
-Translate this {source_lang} text to English:
-
-{text}
-<|im_end|>
-<|im_start|>assistant
-Here is the English translation:
-
-"""
-        return prompt
     
     @modal.web_endpoint(method="POST")
     def translate(self, request: Dict) -> Dict:
-        """Main translation endpoint for long-form text"""
+        """Main translation endpoint"""
         import torch
         
+        # Get request parameters
         text = request.get("text", "").strip()
-        source_language = request.get("source_language", "chinese").lower()
-        max_length = request.get("max_length", 4000)  # Max output length
+        source_language = request.get("source_language", "spanish").lower()
+        max_length = request.get("max_length", 4000)
         
+        # Validate input
         if not text:
             return {
                 "status": "error",
-                "error": "No text provided"
+                "error": "No text provided",
+                "translation": ""
             }
         
-        if len(text) > 10000:  # Limit input to 10k chars
+        if len(text) > 50000:  # 50k character limit
             return {
-                "status": "error", 
-                "error": "Text too long. Maximum 10,000 characters."
+                "status": "error",
+                "error": "Text too long. Maximum 50,000 characters.",
+                "translation": ""
             }
-        
-        # Get full language name
-        lang_name = self.supported_languages.get(source_language, "Chinese")
         
         try:
-            # Format prompt for translation
-            prompt = self.format_translation_prompt(text, lang_name)
-            
-            # Tokenize
-            inputs = self.tokenizer(
-                prompt,
-                return_tensors="pt",
-                max_length=8192,
-                truncation=True
-            ).to(self.model.device)
-            
-            # Generate translation
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_length,
-                    temperature=0.3,  # Lower temp for accurate translation
-                    top_p=0.9,
-                    do_sample=True,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                    repetition_penalty=1.1
-                )
-            
-            # Decode the translation
-            full_output = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Extract just the translation part (after "Here is the English translation:")
-            if "Here is the English translation:" in full_output:
-                translation = full_output.split("Here is the English translation:")[-1].strip()
+            # For Spanish to English using the Marian model
+            if source_language == "spanish":
+                # Split text into chunks if too long
+                max_chunk_size = 512
+                if len(text) > max_chunk_size:
+                    # Process in chunks
+                    chunks = [text[i:i+max_chunk_size] for i in range(0, len(text), max_chunk_size)]
+                    translated_chunks = []
+                    
+                    for chunk in chunks:
+                        inputs = self.tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
+                        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                        
+                        with torch.no_grad():
+                            translated = self.model.generate(**inputs, max_length=512)
+                        
+                        translated_text = self.tokenizer.decode(translated[0], skip_special_tokens=True)
+                        translated_chunks.append(translated_text)
+                    
+                    translation = " ".join(translated_chunks)
+                else:
+                    # Process as single text
+                    inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+                    inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                    
+                    with torch.no_grad():
+                        translated = self.model.generate(**inputs, max_length=512)
+                    
+                    translation = self.tokenizer.decode(translated[0], skip_special_tokens=True)
             else:
-                # Fallback: remove the prompt part
-                translation = full_output[len(prompt):].strip()
-            
-            # Clean up any remaining tokens
-            translation = translation.replace("<|im_end|>", "").strip()
+                # For other languages, use T5 or return as-is for now
+                translation = f"[Translation from {source_language} not fully configured yet. Original text:] {text[:1000]}"
             
             return {
                 "status": "success",
@@ -157,34 +130,38 @@ Here is the English translation:
                 "translation": translation,
                 "source_language": source_language,
                 "target_language": "english",
-                "model": "Hunyuan-MT-7B",
+                "model": "opus-mt-es-en",
                 "original_length": len(text),
                 "translation_length": len(translation)
             }
-        
+            
         except Exception as e:
+            print(f"Translation error: {e}")
             return {
                 "status": "error",
                 "error": str(e),
-                "message": "Translation failed"
+                "message": "Translation failed",
+                "translation": ""
             }
     
     @modal.web_endpoint(method="POST")
     def translate_batch(self, request: Dict) -> Dict:
-        """Batch translation endpoint for multiple texts"""
+        """Batch translation endpoint"""
         texts = request.get("texts", [])
-        source_language = request.get("source_language", "chinese").lower()
+        source_language = request.get("source_language", "spanish").lower()
         
         if not texts:
             return {
                 "status": "error",
-                "error": "No texts provided"
+                "error": "No texts provided",
+                "translations": []
             }
         
         if len(texts) > 10:
             return {
                 "status": "error",
-                "error": "Maximum 10 texts per batch"
+                "error": "Maximum 10 texts per batch",
+                "translations": []
             }
         
         results = []
@@ -204,32 +181,33 @@ Here is the English translation:
     @modal.web_endpoint(method="GET")
     def health(self) -> Dict:
         """Health check endpoint"""
+        import torch
         return {
             "status": "healthy",
-            "model": "Hunyuan-MT-7B",
-            "gpu": "A10G",
+            "model": "opus-mt-es-en (temporary)",
+            "gpu": str(torch.cuda.is_available()),
             "ready": True,
+            "note": "Using smaller model for stability",
             "capabilities": {
-                "max_input_length": 10000,
+                "max_input_length": 50000,
                 "max_output_length": 4000,
                 "batch_support": True,
                 "languages": list(self.supported_languages.keys())
             }
         }
     
-    @modal.web_endpoint(method="GET") 
+    @modal.web_endpoint(method="GET")
     def languages(self) -> Dict:
         """Get supported languages"""
         return {
             "supported_source_languages": self.supported_languages,
             "target_language": "english",
             "total_languages": len(self.supported_languages),
-            "note": "All translations are to English only"
+            "note": "Currently optimized for Spanish to English"
         }
 
-# Optional: Scheduled function to keep the model warm
-@app.function(schedule=modal.Period(minutes=5))
-def keep_warm():
-    """Keep the container warm to avoid cold starts"""
-    print("Keeping container warm...")
-    return {"status": "warm"}
+# Test endpoint to verify deployment
+@app.function()
+@modal.web_endpoint(method="GET")
+def test():
+    return {"status": "Translator app is deployed and ready!"}
