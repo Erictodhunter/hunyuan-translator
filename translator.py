@@ -31,31 +31,50 @@ class HunyuanTranslator:
         from transformers import MarianMTModel, MarianTokenizer
         import torch
         
-        print("🔄 Loading translation model...")
+        print("🔄 Loading translation models...")
         
-        # Using a smaller model that works reliably
-        model_name = "Helsinki-NLP/opus-mt-es-en"  # Spanish to English
+        # Load multiple models for different languages
+        self.models = {}
+        self.tokenizers = {}
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        try:
-            self.tokenizer = MarianTokenizer.from_pretrained(model_name)
-            self.model = MarianMTModel.from_pretrained(model_name)
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.model = self.model.to(self.device)
-            print(f"✅ Model loaded successfully on {self.device}!")
-        except Exception as e:
-            print(f"❌ Error loading model: {e}")
-            # Fallback
-            from transformers import T5ForConditionalGeneration, T5Tokenizer
-            model_name = "t5-small"
-            self.tokenizer = T5Tokenizer.from_pretrained(model_name)
-            self.model = T5ForConditionalGeneration.from_pretrained(model_name)
-            self.device = "cpu"
-            print("✅ Loaded fallback T5 model")
+        # Language to model mapping
+        self.language_models = {
+            "spanish": "Helsinki-NLP/opus-mt-es-en",
+            "french": "Helsinki-NLP/opus-mt-fr-en", 
+            "german": "Helsinki-NLP/opus-mt-de-en",
+            "italian": "Helsinki-NLP/opus-mt-it-en",
+            "portuguese": "Helsinki-NLP/opus-mt-pt-en"
+        }
+        
+        # Load models for supported languages
+        for lang, model_name in self.language_models.items():
+            try:
+                print(f"Loading {lang} model: {model_name}")
+                tokenizer = MarianTokenizer.from_pretrained(model_name)
+                model = MarianMTModel.from_pretrained(model_name)
+                model = model.to(self.device)
+                
+                self.tokenizers[lang] = tokenizer
+                self.models[lang] = model
+                print(f"✅ {lang} model loaded successfully!")
+            except Exception as e:
+                print(f"❌ Error loading {lang} model: {e}")
+        
+        # Fallback model
+        if not self.models:
+            print("Loading fallback model...")
+            try:
+                self.tokenizers["fallback"] = MarianTokenizer.from_pretrained("Helsinki-NLP/opus-mt-es-en")
+                self.models["fallback"] = MarianMTModel.from_pretrained("Helsinki-NLP/opus-mt-es-en").to(self.device)
+                print("✅ Fallback model loaded")
+            except Exception as e:
+                print(f"❌ Fallback model failed: {e}")
         
         # Language mapping
         self.supported_languages = {
             "spanish": "Spanish",
-            "french": "French",
+            "french": "French", 
             "german": "German",
             "italian": "Italian",
             "portuguese": "Portuguese",
@@ -66,10 +85,52 @@ class HunyuanTranslator:
             "russian": "Russian"
         }
     
+    def translate_text(self, text: str, source_language: str) -> str:
+        """Translate text using appropriate model"""
+        import torch
+        
+        # Check if we have a model for this language
+        if source_language in self.models:
+            model = self.models[source_language]
+            tokenizer = self.tokenizers[source_language]
+        elif "fallback" in self.models:
+            model = self.models["fallback"]
+            tokenizer = self.tokenizers["fallback"]
+            print(f"Using fallback model for {source_language}")
+        else:
+            return f"No translation model available for {source_language}"
+        
+        # Split text into chunks if too long
+        max_chunk_size = 512
+        if len(text) > max_chunk_size:
+            # Process in chunks
+            chunks = [text[i:i+max_chunk_size] for i in range(0, len(text), max_chunk_size)]
+            translated_chunks = []
+            
+            for chunk in chunks:
+                inputs = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
+                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                
+                with torch.no_grad():
+                    translated = model.generate(**inputs, max_length=512, num_beams=4, early_stopping=True)
+                
+                translated_text = tokenizer.decode(translated[0], skip_special_tokens=True)
+                translated_chunks.append(translated_text)
+            
+            return " ".join(translated_chunks)
+        else:
+            # Process as single text
+            inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                translated = model.generate(**inputs, max_length=512, num_beams=4, early_stopping=True)
+            
+            return tokenizer.decode(translated[0], skip_special_tokens=True)
+    
     @modal.web_endpoint(method="POST")
     def translate(self, request: Dict) -> Dict:
         """Main translation endpoint"""
-        import torch
         
         # Get request parameters
         text = request.get("text", "").strip()
@@ -92,38 +153,11 @@ class HunyuanTranslator:
             }
         
         try:
-            # For Spanish to English using the Marian model
-            if source_language == "spanish":
-                # Split text into chunks if too long
-                max_chunk_size = 512
-                if len(text) > max_chunk_size:
-                    # Process in chunks
-                    chunks = [text[i:i+max_chunk_size] for i in range(0, len(text), max_chunk_size)]
-                    translated_chunks = []
-                    
-                    for chunk in chunks:
-                        inputs = self.tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                        
-                        with torch.no_grad():
-                            translated = self.model.generate(**inputs, max_length=512)
-                        
-                        translated_text = self.tokenizer.decode(translated[0], skip_special_tokens=True)
-                        translated_chunks.append(translated_text)
-                    
-                    translation = " ".join(translated_chunks)
-                else:
-                    # Process as single text
-                    inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
-                    
-                    with torch.no_grad():
-                        translated = self.model.generate(**inputs, max_length=512)
-                    
-                    translation = self.tokenizer.decode(translated[0], skip_special_tokens=True)
-            else:
-                # For other languages
-                translation = f"[Translation from {source_language} not fully configured yet. Original text:] {text[:1000]}"
+            # Translate the text
+            translation = self.translate_text(text, source_language)
+            
+            # Determine which model was used
+            model_used = self.language_models.get(source_language, "fallback-opus-mt-es-en")
             
             return {
                 "status": "success",
@@ -131,7 +165,7 @@ class HunyuanTranslator:
                 "translation": translation,
                 "source_language": source_language,
                 "target_language": "english",
-                "model": "opus-mt-es-en",
+                "model": model_used,
                 "original_length": len(text),
                 "translation_length": len(translation)
             }
@@ -185,10 +219,10 @@ class HunyuanTranslator:
         import torch
         return {
             "status": "healthy",
-            "model": "opus-mt-es-en",
+            "models_loaded": list(self.models.keys()),
             "gpu": str(torch.cuda.is_available()),
             "ready": True,
-            "note": "Using smaller model for stability",
+            "note": "Multi-language translation support",
             "capabilities": {
                 "max_input_length": 50000,
                 "max_output_length": 4000,
@@ -204,5 +238,6 @@ class HunyuanTranslator:
             "supported_source_languages": self.supported_languages,
             "target_language": "english",
             "total_languages": len(self.supported_languages),
-            "note": "Currently optimized for Spanish to English"
+            "models_available": list(self.models.keys()),
+            "note": "Supports French, Spanish, German, Italian, Portuguese"
         }
