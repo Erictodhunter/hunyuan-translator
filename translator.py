@@ -70,8 +70,9 @@ class HunyuanTranslator:
         """Translate using the LLM with proper prompting"""
         import torch
         
-        if not self.model_loaded:
-            return "Translation service not available"
+        # Check if model is loaded and available
+        if not hasattr(self, 'model_loaded') or not self.model_loaded or self.model is None:
+            return "Translation service not properly initialized"
         
         # Create the translation prompt
         prompt = f"Translate the following text from {source_language} to {target_language}, without additional explanation.\n\n{text}"
